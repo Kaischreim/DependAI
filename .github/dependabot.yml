@@ -14,3 +14,8 @@ updates:
     directory: "/folder2"
     schedule:
       interval: "daily"
+    groups:
+      react-stack:
+        patterns:
+          - "react"
+          - "react-dom"
