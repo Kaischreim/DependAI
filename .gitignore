@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.env
+
+# Node
+node_modules/
+npm-debug.log
+
+# Go
+*.exe
+*.out
+
+# VS Code
+.vscode/
