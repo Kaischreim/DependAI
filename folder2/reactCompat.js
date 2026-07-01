@@ -1,7 +1,7 @@
 const { version: reactVersion } = require("react/package.json");
 const { version: reactDomVersion } = require("react-dom/package.json");
 
-const SUPPORTED_REACT_MAJOR = 18;
+const SUPPORTED_REACT_MAJOR = 19;
 
 function assertReactCompatibility() {
   const reactMajor = Number(reactVersion.split(".")[0]);
