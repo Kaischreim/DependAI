@@ -86,7 +86,7 @@ def is_allowed_source_file(path_string):
     except ValueError:
         return False
 
-    if any(part in {".git", ".github", "node_modules"} for part in relative.parts):
+    if any(part in {".git", ".github", "node_modules", "agent-tools"} for part in relative.parts):
         return False
 
     if target.suffix not in SOURCE_SUFFIXES:
