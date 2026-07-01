@@ -224,17 +224,11 @@ def commit_and_push(changed_files):
 
     git("commit", "-m", "fix: adapt code after dependency update")
 
-    branch = subprocess.check_output(
-        ["git", "branch", "--show-current"],
-        cwd=ROOT,
-        text=True,
-    ).strip()
+    branch = os.environ.get("TARGET_BRANCH")
 
     if not branch:
-        raise RuntimeError(
-            "Detached HEAD: ai-fix.yml checked out a commit instead of the PR branch."
-        )
-
+        raise RuntimeError("TARGET_BRANCH was not provided by the workflow.")
+            
     git("push", "origin", f"HEAD:refs/heads/{branch}")
 
 
