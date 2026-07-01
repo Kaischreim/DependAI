@@ -1,4 +1,5 @@
 name: AI Fix
+
 on:
   workflow_run:
     workflows: ["Run Tests"]
@@ -9,23 +10,35 @@ jobs:
   fix:
     if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      # This is the broken Dependabot PR code that needs repair.
+      - name: Check out failing PR branch
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
+          token: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0
+
+      # This gets the newest ai_fix.py from main without replacing the PR code.
+      - name: Check out latest AI agent from main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: agent-tools
           token: ${{ secrets.PAT_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: "1.21"
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Install Python dependencies
         run: pip install anthropic
@@ -35,4 +48,5 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python ai_fix.py
+          TARGET_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: python agent-tools/ai_fix.py
