@@ -1,133 +1,288 @@
-import subprocess
-import anthropic
 import os
+import re
+import subprocess
 from pathlib import Path
+
+import anthropic
+
+ROOT = Path.cwd().resolve()
+SOURCE_SUFFIXES = {".go", ".js", ".jsx", ".ts", ".tsx"}
+
+
+def run_command(command, cwd=ROOT):
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
 
 def run_tests():
     results = []
-    
-    # run Go tests
-    go_result = subprocess.run(
-        ["go", "test", "./..."],
-        capture_output=True, text=True
+
+    go_result = run_command(["go", "test", "./..."])
+    results.append(
+        ("Go", go_result.stdout + go_result.stderr, go_result.returncode)
     )
-    results.append(("Go", go_result.stdout + go_result.stderr, go_result.returncode))
-    
-    # run JS tests folder1
-    if Path("folder1").exists():
-        npm_result = subprocess.run(
-            ["npm", "test", "--if-present"],
-            capture_output=True, text=True,
-            cwd="folder1"
+
+    for folder in ("folder1", "folder2"):
+        folder_path = ROOT / folder
+
+        if not (folder_path / "package.json").is_file():
+            continue
+
+        install_result = run_command(["npm", "install"], cwd=folder_path)
+        results.append(
+            (
+                f"{folder} install",
+                install_result.stdout + install_result.stderr,
+                install_result.returncode,
+            )
         )
-        results.append(("JS folder1", npm_result.stdout + npm_result.stderr, npm_result.returncode))
-    
-    # run JS tests folder2
-    if Path("folder2").exists():
-        npm_result = subprocess.run(
-            ["npm", "test", "--if-present"],
-            capture_output=True, text=True,
-            cwd="folder2"
+
+        if install_result.returncode != 0:
+            continue
+
+        test_result = run_command(["npm", "test"], cwd=folder_path)
+        results.append(
+            (
+                f"{folder} tests",
+                test_result.stdout + test_result.stderr,
+                test_result.returncode,
+            )
         )
-        results.append(("JS folder2", npm_result.stdout + npm_result.stderr, npm_result.returncode))
-    
-    # combine all errors
-    all_errors = "\n".join(
-        f"=== {name} ===\n{output}" 
-        for name, output, code in results 
+
+    errors = "\n".join(
+        f"=== {name} ===\n{output}"
+        for name, output, code in results
         if code != 0
     )
-    overall_pass = all(code == 0 for _, _, code in results)
-    return all_errors, overall_pass
+
+    passing = all(code == 0 for _, _, code in results)
+    return errors, passing
+
+
+def is_test_file(path):
+    name = path.name
+    return (
+        name.endswith("_test.go")
+        or ".test." in name
+        or ".spec." in name
+    )
+
+
+def is_allowed_source_file(path_string):
+    requested = Path(path_string)
+
+    if requested.is_absolute():
+        return False
+
+    target = (ROOT / requested).resolve()
+
+    try:
+        relative = target.relative_to(ROOT)
+    except ValueError:
+        return False
+
+    if any(part in {".git", ".github", "node_modules"} for part in relative.parts):
+        return False
+
+    if target.suffix not in SOURCE_SUFFIXES:
+        return False
+
+    if is_test_file(target):
+        return False
+
+    # Claude may edit existing application source only.
+    return target.is_file()
+
 
 def get_repo_files():
     files = {}
-    extensions = [".go", ".js", ".jsx", ".ts", ".tsx"]
-    for f in Path(".").rglob("*"):
-        if any(str(f).endswith(ext) for ext in extensions):
-            if ".github" not in str(f) and "node_modules" not in str(f):
-                files[str(f)] = f.read_text()
+
+    for file_path in ROOT.rglob("*"):
+        if not file_path.is_file():
+            continue
+
+        relative = file_path.relative_to(ROOT)
+
+        if any(part in {".git", ".github", "node_modules"} for part in relative.parts):
+            continue
+
+        if file_path.suffix not in SOURCE_SUFFIXES:
+            continue
+
+        files[relative.as_posix()] = file_path.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+
     return files
+
 
 def fix_with_claude(error_output, files):
     client = anthropic.Anthropic()
-    
-    files_str = "\n\n".join(
+
+    all_files = "\n\n".join(
         f"=== {path} ===\n{content}"
         for path, content in files.items()
     )
-    
+
+    writable_files = [
+        path for path in files
+        if is_allowed_source_file(path)
+    ]
+
     message = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=4096,
         messages=[{
             "role": "user",
             "content": f"""
-You are fixing a web app after a dependency update broke the tests.
+You are fixing application code after a dependency update broke tests.
 
-Here are the test errors:
+Test errors:
 {error_output}
 
-Here are all the source files:
-{files_str}
+Repository source and test files:
+{all_files}
 
 Rules:
-- Fix the code so the tests pass.
-- Only change what is necessary to fix the breaking changes.
-- Do not change test files.
-- Do not change go.mod, go.sum, or package.json.
-- Output ONLY the fixed files in this exact format:
-=== filepath ===
-(fixed code here)
+- Fix the application code so tests pass.
+- Do not modify test files.
+- Do not modify package.json, package-lock.json, go.mod, go.sum, or workflow files.
+- Only modify an existing file from this allowed list:
+{chr(10).join(writable_files)}
+- Output ONLY changed files in this exact format:
 
-Only include files you actually changed.
+=== relative/filepath ===
+complete replacement file contents
+
+Do not use Markdown code fences.
 """
-        }]
+        }],
     )
+
     return message.content[0].text
 
-def apply_fixes(claude_output):
-    sections = claude_output.split("=== ")
-    for section in sections[1:]:
-        lines = section.split("\n")
-        filename = lines[0].replace(" ===", "").strip()
-        code = "\n".join(lines[1:]).strip()
-        Path(filename).write_text(code)
-        print(f"Fixed {filename}")
 
-def git(cmd):
-    subprocess.run(cmd, check=True)
+def apply_fixes(claude_output):
+    matches = list(
+        re.finditer(r"^=== ([^\n=]+) ===\s*$", claude_output, re.MULTILINE)
+    )
+
+    if not matches:
+        raise ValueError("Claude did not return any correctly formatted files.")
+
+    changed_files = []
+
+    for index, match in enumerate(matches):
+        filename = match.group(1).strip()
+
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(claude_output)
+        code = claude_output[start:end].strip()
+
+        if not is_allowed_source_file(filename):
+            raise ValueError(f"Refusing to edit disallowed file: {filename}")
+
+        target = ROOT / filename
+        old_code = target.read_text(encoding="utf-8", errors="replace")
+        new_code = code + "\n"
+
+        if old_code != new_code:
+            target.write_text(new_code, encoding="utf-8")
+            changed_files.append(filename)
+            print(f"Fixed {filename}")
+
+    return changed_files
+
+
+def git(*args):
+    subprocess.run(
+        ["git", *args],
+        cwd=ROOT,
+        check=True,
+    )
+
+
+def commit_and_push(changed_files):
+    git("add", "--", *changed_files)
+    git("diff", "--cached", "--check")
+
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=ROOT,
+        check=False,
+    )
+
+    if staged.returncode == 0:
+        print("No source-code changes to commit.")
+        return
+
+    git("commit", "-m", "fix: adapt code after dependency update")
+
+    branch = subprocess.check_output(
+        ["git", "branch", "--show-current"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+
+    if not branch:
+        raise RuntimeError(
+            "Detached HEAD: ai-fix.yml checked out a commit instead of the PR branch."
+        )
+
+    git("push", "origin", f"HEAD:refs/heads/{branch}")
+
 
 def main():
-    # bot identity
-    git(["git", "config", "user.email", "arduino-bot@noreply"])
-    git(["git", "config", "user.name", "arduino-bot"])
-    
-    # use PAT for push
+    git("config", "user.email", "arduino-bot@noreply")
+    git("config", "user.name", "arduino-bot")
+
     pat = os.environ.get("PAT_TOKEN")
     repo = os.environ.get("GITHUB_REPOSITORY")
+
     if pat and repo:
-        git(["git", "remote", "set-url", "origin",
-             f"https://x-access-token:{pat}@github.com/{repo}.git"])
+        git(
+            "remote",
+            "set-url",
+            "origin",
+            f"https://x-access-token:{pat}@github.com/{repo}.git",
+        )
 
-    max_attempts = 3
+    errors, passing = run_tests()
 
-    for attempt in range(max_attempts):
-        print(f"Attempt {attempt + 1}/{max_attempts}")
-        
-        error_output, passing = run_tests()
-        
+    if passing:
+        print("All tests already pass. No AI fix needed.")
+        return
+
+    changed_total = []
+
+    for attempt in range(1, 4):
+        print(f"AI repair attempt {attempt}/3")
+        print(errors)
+
+        files = get_repo_files()
+        claude_output = fix_with_claude(errors, files)
+        changed_now = apply_fixes(claude_output)
+
+        if not changed_now:
+            raise RuntimeError("Claude returned no actual source-code changes.")
+
+        changed_total.extend(changed_now)
+
+        errors, passing = run_tests()
+
         if passing:
-            print("All tests passing!")
-            git(["git", "push"])
+            print("Tests pass after AI repair.")
+            commit_and_push(sorted(set(changed_total)))
             return
 
-        print(f"Tests failed:\n{error_output}")
-        files = get_repo_files()
-        fixes = fix_with_claude(error_output, files)
-        apply_fixes(fixes)
+    print("Could not fix after 3 attempts. No changes were pushed.")
 
-    print("Could not fix after 3 attempts - human review needed")
 
 if __name__ == "__main__":
     main()
