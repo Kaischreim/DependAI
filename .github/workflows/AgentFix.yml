@@ -20,13 +20,6 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
           fetch-depth: 0
 
-      - name: Merge current main into failing PR code
-        run: |
-          git config user.email "arduino-bot@noreply"
-          git config user.name "arduino-bot"
-          git fetch origin main
-          git merge --no-edit origin/main
-
       # This gets the newest ai_fix.py from main without replacing the PR code.
       - name: Check out latest AI agent from main
         uses: actions/checkout@v4
