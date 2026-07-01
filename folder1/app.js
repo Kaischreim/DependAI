@@ -2,7 +2,7 @@ const express = require("express");
 const { version: expressVersion } = require("express/package.json");
 
 // Deliberate compatibility gate for testing Dependabot + AI Fix.
-const SUPPORTED_EXPRESS_MAJOR = 4;
+const SUPPORTED_EXPRESS_MAJOR = 5;
 
 function createApp() {
   const installedMajor = Number(expressVersion.split(".")[0]);
